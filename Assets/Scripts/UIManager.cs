@@ -8,9 +8,13 @@ public class UIManager : MonoBehaviour
     public TextMeshProUGUI scoreText; // Assign via Inspector
     public TextMeshProUGUI moveText; // Assign in Inspector
 
+    public GameObject replayBt;
+
     void Awake()
     {
         Instance = this;
+
+        replayBt.SetActive(false);
     }
 
     public void UpdateScoreUI(int score)
@@ -21,5 +25,11 @@ public class UIManager : MonoBehaviour
     public void UpdateMoveUI(int moveCount)
     {
         moveText.text = "Moves: " + moveCount;
+    }
+
+    public void ReplayGame()
+    {
+        GameManager.Instance.ResetGame();
+        replayBt.SetActive(false);
     }
 }

@@ -112,6 +112,8 @@ public class GameManager : MonoBehaviour
 
         isBusy = true; // 🔒 Prevent further flips until this one is processed
 
+        SoundManager.Instance.PlayFlipSound();
+
         if (flippedCards.Count == 2)
         {
             canFlip = false; // 🔒 Lock further flips until reset completes
@@ -121,6 +123,20 @@ public class GameManager : MonoBehaviour
         {
             isBusy = false; // 🔒 Prevent further flips until this one is processed
         }
+    }
+
+    void CheckForWin()
+    {
+        foreach (var card in allCards)
+        {
+            if (!card.IsMatched)
+                return; // Still unmatched cards
+        }
+
+        // All cards matched
+        SoundManager.Instance.PlayGameWinSound();
+
+        UIManager.Instance.replayBt.SetActive(true);
     }
 
     IEnumerator DelayedReset()
@@ -158,15 +174,19 @@ public class GameManager : MonoBehaviour
 
             UIManager.Instance.UpdateScoreUI(score);
 
+            SoundManager.Instance.PlayMatchSound();
             flippedCards.Clear(); // ✅ Only clear here if it's a match
 
             canFlip = true; // ✅ Unlock flipping after match
 
             isBusy = false; // 🔓 Allow further flips
+
+            CheckForWin();
         }
         else
         {
             comboCount = 0;
+            SoundManager.Instance.PlayMismatchSound();
             StartCoroutine(DelayedReset());
             // ❌ DO NOT clear here — wait until coroutine finishes
         }
@@ -193,5 +213,27 @@ public class GameManager : MonoBehaviour
     public void LoadProgress()
     {
         score = PlayerPrefs.GetInt("Score", 0);
+    }
+
+    public void ResetGame()
+    {
+        // Reset game state
+        score = 0;
+        moveCount = 0;
+        comboCount = 0;
+        comboTimer = 0f;
+
+        UIManager.Instance.UpdateScoreUI(score);
+        UIManager.Instance.UpdateMoveUI(moveCount);
+
+        // Clear all cards
+        foreach (var card in allCards)
+        {
+            Destroy(card.gameObject);
+        }
+        allCards.Clear();
+        flippedCards.Clear();
+
+        GenerateCards(); // Regenerate cards
     }
 }
