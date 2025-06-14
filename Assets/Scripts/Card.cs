@@ -15,8 +15,10 @@ public class Card : MonoBehaviour
 
     public void OnClick()
     {
+        if (GameManager.Instance.isBusy) return;
         if (isMatched || isFlipped || isAnimating) return;
         StartCoroutine(Flip(true)); // true = forward flip
+        GameManager.Instance.OnCardFlipped(this);
     }
 
     public IEnumerator Flip(bool forward)
