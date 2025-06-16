@@ -3,62 +3,74 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
+/// <summary>
+/// Manages the core game logic for a memory card matching game, handling card generation, matching, scoring, and game state.
+/// </summary>
 public class GameManager : MonoBehaviour
 {
     public static GameManager Instance;
-
     public bool isBusy = false;
 
+    [Header("Game Components")]
     public GridAutoScaler gridAutoScaler;
     public GameObject cardPrefab;
     public Transform cardContainer;
     public Sprite[] cardImages;
+
+    [Header("Grid Settings")]
     public int rows = 2;
     public int cols = 2;
+    public Vector2 cardSize = new(115, 181);
+    public Vector2 spacing = new(10, 10);
+    public Vector2 screenSize = new(1500, 800);
 
-    private List<Card> flippedCards = new();
-    private List<Card> allCards = new();
-    private int score = 0;
-    private int comboCount = 0;
-    private float comboTimer = 0f;
+    [Header("Game Settings")]
     public float comboResetTime = 3f;
 
-    private int moveCount = 0;
-    private bool canFlip = true;
+    private readonly List<Card> flippedCards = new();
+    private readonly List<Card> allCards = new();
+    private int score;
+    private int comboCount;
+    private float comboTimer;
+    private int moveCount;
 
-    public Vector2 cardSize = new(115, 181); // settable via Inspector
-    public Vector2 spacing = new(10, 10);     // match Grid spacing
-    public Vector2 screenSize = new(1500, 800); // or use Screen.width/height
+    private Queue<Card> cardFlipQueue = new();
+    private bool isChecking = false;
+
 
     void Awake() => Instance = this;
 
-    void Start()
+
+    public void SetRowCol(int row, int col)
+    {
+        rows = row; cols = col;
+        PlayerPrefs.SetString("rowCol", $"{row},{col}");
+        UIManager.Instance.savedGridValue = PlayerPrefs.GetString("rowCol");
+    }
+
+    public void StartGame()
     {
         if (!ValidateGridSize())
         {
-            Debug.LogWarning("❌ Grid too large for the screen. Choose fewer rows/columns.");
+            Debug.LogWarning("Grid too large for the screen. Choose fewer rows/columns.");
             return;
         }
 
         gridAutoScaler.SetGridSize(rows, cols);
-
         GenerateCards();
-
-        UIManager.Instance.UpdateScoreUI(score);
-
-        UIManager.Instance.UpdateMoveUI(moveCount);
+        UpdateUI();
     }
 
+    /// <summary>
+    /// Creates and arranges cards in the grid, ensuring proper pairing and randomization.
+    /// </summary>
     void GenerateCards()
     {
         int totalCards = rows * cols;
         int pairCount = totalCards / 2;
-        List<int> ids = new();
-
-        // Get unique IDs from available images
+        var ids = new List<int>(totalCards);
         int availableImageCount = cardImages.Length;
 
-        // Fill with random IDs from available images
         for (int i = 0; i < pairCount; i++)
         {
             int id = i < availableImageCount ? i : Random.Range(0, availableImageCount);
@@ -66,132 +78,130 @@ public class GameManager : MonoBehaviour
             ids.Add(id);
         }
 
-        // If odd number of cards, add one more
         if (totalCards % 2 != 0)
         {
-            int id = Random.Range(0, availableImageCount);
-            ids.Add(id);
+            ids.Add(Random.Range(0, availableImageCount));
         }
 
-        // Shuffle IDs
         Shuffle(ids);
 
-        // Instantiate cards
         for (int i = 0; i < ids.Count; i++)
         {
-            GameObject cardObj = Instantiate(cardPrefab, cardContainer);
-            Card card = cardObj.GetComponent<Card>();
+            var cardObj = Instantiate(cardPrefab, cardContainer);
+            var card = cardObj.GetComponent<Card>();
             card.cardID = ids[i];
             card.front.GetComponent<Image>().sprite = cardImages[ids[i]];
             allCards.Add(card);
         }
     }
 
+    /// <summary>
+    /// Verifies if the current grid configuration fits within the screen boundaries.
+    /// </summary>
     bool ValidateGridSize()
     {
         float requiredWidth = (cardSize.x * cols) + (spacing.x * (cols - 1));
         float requiredHeight = (cardSize.y * rows) + (spacing.y * (rows - 1));
-
         return requiredWidth <= screenSize.x && requiredHeight <= screenSize.y;
     }
 
+    /// <summary>
+    /// Randomizes the order of elements in a list using the Fisher-Yates shuffle algorithm.
+    /// </summary>
     void Shuffle<T>(List<T> list)
     {
-        for (int i = 0; i < list.Count; i++)
+        for (int i = list.Count - 1; i > 0; i--)
         {
-            int randomIndex = Random.Range(i, list.Count);
+            int randomIndex = Random.Range(0, i + 1);
             (list[i], list[randomIndex]) = (list[randomIndex], list[i]);
         }
     }
 
+    /// <summary>
+    /// Handles the logic when a card is flipped, managing game state and initiating matching checks.
+    /// </summary>
     public void OnCardFlipped(Card card)
     {
-        if (!canFlip) return;
+        if (card.IsMatched || flippedCards.Contains(card) || isBusy)
+            return;
 
         flippedCards.Add(card);
-
-        isBusy = true; // 🔒 Prevent further flips until this one is processed
-
         SoundManager.Instance.PlayFlipSound();
 
-        if (flippedCards.Count == 2)
+        if (!isChecking && flippedCards.Count >= 2)
         {
-            canFlip = false; // 🔒 Lock further flips until reset completes
-            CheckMatch();
-        }
-        else
-        {
-            isBusy = false; // 🔒 Prevent further flips until this one is processed
+            StartCoroutine(CheckMatchCoroutine());
         }
     }
 
+    IEnumerator CheckMatchCoroutine()
+    {
+        isChecking = true;
+
+        while (flippedCards.Count >= 2)
+        {
+            var card1 = flippedCards[0];
+            var card2 = flippedCards[1];
+
+            moveCount++;
+            UIManager.Instance.UpdateMoveUI(moveCount);
+
+            if (card1.cardID == card2.cardID)
+            {
+                card1.Match();
+                card2.Match();
+
+                comboCount++;
+                comboTimer = comboResetTime;
+                score += 1 + (comboCount - 1) * 5;
+                UIManager.Instance.UpdateComboText(comboCount);
+                UIManager.Instance.UpdateScoreUI(score);
+
+                flippedCards.RemoveAt(1);
+                flippedCards.RemoveAt(0);
+
+                yield return new WaitForSeconds(0.15f); //this is the duration of card flip animation set in card.cs Script
+                SoundManager.Instance.PlayMatchSound();
+                CheckForWin();
+
+            }
+            else
+            {
+                comboCount = 0;
+                UIManager.Instance.UpdateComboText(comboCount);
+                yield return new WaitForSeconds(1f);
+                card1.ResetFlipAnimated();
+                card2.ResetFlipAnimated();
+                flippedCards.RemoveAt(1);
+                flippedCards.RemoveAt(0);
+
+                yield return new WaitForSeconds(0.15f); //this is the duration of card flip animation set in card.cs Script
+                SoundManager.Instance.PlayMismatchSound();
+            }
+
+            yield return null;
+        }
+
+        isChecking = false;
+    }
+
+
+    /// <summary>
+    /// Checks if all cards have been matched, triggering win condition if true.
+    /// </summary>
     void CheckForWin()
     {
-        foreach (var card in allCards)
+        if (allCards.TrueForAll(card => card.IsMatched))
         {
-            if (!card.IsMatched)
-                return; // Still unmatched cards
-        }
-
-        // All cards matched
-        SoundManager.Instance.PlayGameWinSound();
-
-        UIManager.Instance.replayBt.SetActive(true);
-    }
-
-    IEnumerator DelayedReset()
-    {
-        yield return new WaitForSeconds(1f);
-
-        foreach (var card in flippedCards)
-        {
-            card.ResetFlipAnimated(); // Uses the coroutine for smooth flip-back
-        }
-
-        flippedCards.Clear(); // ✅ Now it's safe to clear
-        canFlip = true; // ✅ Unlock flipping after mismatch reset
-        isBusy = false; // 🔓 Allow further flips
-    }
-
-    void CheckMatch()
-    {
-        moveCount++;
-
-        UIManager.Instance.UpdateScoreUI(moveCount);
-
-        Card card1 = flippedCards[0];
-        Card card2 = flippedCards[1];
-
-        if (card1.cardID == card2.cardID)
-        {
-            card1.Match();
-            card2.Match();
-
-            comboCount++;
-            comboTimer = comboResetTime;
-            int points = 10 + (comboCount - 1) * 5;
-            score += points;
-
-            UIManager.Instance.UpdateScoreUI(score);
-
-            SoundManager.Instance.PlayMatchSound();
-            flippedCards.Clear(); // ✅ Only clear here if it's a match
-
-            canFlip = true; // ✅ Unlock flipping after match
-
-            isBusy = false; // 🔓 Allow further flips
-
-            CheckForWin();
-        }
-        else
-        {
-            comboCount = 0;
-            SoundManager.Instance.PlayMismatchSound();
-            StartCoroutine(DelayedReset());
-            // ❌ DO NOT clear here — wait until coroutine finishes
+            SoundManager.Instance.PlayGameWinSound();
+            UIManager.Instance.ShowGameOverUI();
         }
     }
 
+
+    /// <summary>
+    /// Updates the combo timer and resets combo count when timer expires.
+    /// </summary>
     void Update()
     {
         if (comboTimer > 0)
@@ -200,33 +210,49 @@ public class GameManager : MonoBehaviour
             if (comboTimer <= 0)
             {
                 comboCount = 0;
+                UIManager.Instance.UpdateComboText(comboCount);
             }
         }
     }
 
+    /// <summary>
+    /// Updates the UI elements with current score and move count.
+    /// </summary>
+    void UpdateUI()
+    {
+        UIManager.Instance.UpdateScoreUI(score);
+        UIManager.Instance.UpdateMoveUI(moveCount);
+        UIManager.Instance.UpdateComboText(comboCount);
+    }
+
+    /// <summary>
+    /// Saves the current game score to persistent storage.
+    /// </summary>
     public void SaveProgress()
     {
         PlayerPrefs.SetInt("Score", score);
         PlayerPrefs.Save();
     }
 
+    /// <summary>
+    /// Loads the previously saved game score from persistent storage.
+    /// </summary>
     public void LoadProgress()
     {
         score = PlayerPrefs.GetInt("Score", 0);
     }
 
+    /// <summary>
+    /// Resets the game state, clearing all cards and regenerating a new game board.
+    /// </summary>
     public void ResetGame()
     {
-        // Reset game state
         score = 0;
         moveCount = 0;
         comboCount = 0;
+        UIManager.Instance.UpdateComboText(comboCount);
         comboTimer = 0f;
 
-        UIManager.Instance.UpdateScoreUI(score);
-        UIManager.Instance.UpdateMoveUI(moveCount);
-
-        // Clear all cards
         foreach (var card in allCards)
         {
             Destroy(card.gameObject);
@@ -234,6 +260,7 @@ public class GameManager : MonoBehaviour
         allCards.Clear();
         flippedCards.Clear();
 
-        GenerateCards(); // Regenerate cards
+        UpdateUI();
+        GenerateCards();
     }
 }
